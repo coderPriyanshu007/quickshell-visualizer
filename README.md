@@ -399,6 +399,4 @@ waves = 0                     # Wave-based smoothing filter (0 = off).
 
 ---
 
-## License
 
-Add your license of choice here (e.g. MIT).
