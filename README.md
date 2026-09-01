@@ -185,7 +185,7 @@ gradient.addColorStop(0.5, colors[1])  // center
 gradient.addColorStop(1.0, colors[2])  // right edge
 ```
 
-> ⚠️ **Provide at least 3 colors.** The gradient code currently reads `colors[0]`, `colors[1]`, and `colors[2]` directly. If your palette file or `paletteKeys` only yields one or two colors, the missing gradient stops will be `undefined` and the fill may render incorrectly. Make sure `paletteKeys` lists at least three keys that actually exist in your palette JSON (or that the recursive fallback can find at least three colors).
+
 
 If `usePalette` is `false`, or the palette file is missing/unparseable/empty, AudioFrame silently falls back to the flat `visualizerColor`.
 
