@@ -1,44 +1,404 @@
 # AudioFrame
 
-A lightweight **Quickshell audio visualizer** that displays a symmetrical, mirrored waveform at the top or bottom of your screen.
+A lightweight, click-through audio visualizer widget for [Quickshell](https://quickshell.outfoxxed.me/) on Wayland. AudioFrame draws a smooth, reactive waveform/spectrum ridge along the edge of your screen, driven by real-time audio data from [`cava`](https://github.com/karlstav/cava).
 
-AudioFrame uses **CAVA** for real-time audio data and provides a single `Config.qml` file for tuning the visualizer.
-
----
-
-## Features
-
-- Real-time audio visualization using CAVA
-- Symmetrical / mirrored waveform
-- Bass-focused center
-- Treble/high-frequency response toward the edges
-- Top or bottom positioning
-- Automatic positioning around existing panels
-- Left / center / right alignment
-- Configurable waveform width and height
-- Configurable peak height
-- Configurable audio sensitivity
-- Configurable bass / mid / treble response
-- Configurable smoothing and decay
-- Configurable ridge sharpness
-- Configurable beat/transient response
-- Transparent background
-- Click-through window
-- Can run automatically on login using systemd
-- Optional Matugen integration can be added for dynamic wallpaper colors
+It runs as a `systemd --user` service so it starts automatically with your graphical session and restarts itself if it ever crashes.
 
 ---
 
-# Requirements
+## How it works
 
-You need:
+```
+PipeWire audio  ─▶  cava (spectrum analyzer)  ─▶  AudioFrame.qml (parses + smooths data)  ─▶  Canvas (draws waveform)
+```
 
-- Linux
-- Quickshell
-- CAVA
-- A working audio system
+- **`cava`** reads your system audio via PipeWire and streams ASCII bar values to stdout, configured by `cava.conf`.
+- **`AudioFrame.qml`** launches `cava` as a subprocess, parses each frame of bar data, and applies a chain of DSP-style transforms (boosting, smoothing, transient/beat detection, mirroring) before drawing the result to a `Canvas`.
+- **`AudioFrameWindow.qml`** creates a transparent, click-through, always-on-top panel window (one per monitor) and positions the visualizer inside it.
+- **`Config.qml`** is the single file you edit to change how AudioFrame looks and behaves.
+- **`shell.qml`** is the Quickshell entry point that spawns an `AudioFrameWindow` for every connected screen.
 
-Check Quickshell:
+---
+
+## Requirements
+
+| Dependency | Purpose |
+|---|---|
+| [Quickshell](https://quickshell.outfoxxed.me/) | Wayland shell toolkit that runs the `.qml` files |
+| [`cava`](https://github.com/karlstav/cava) | Console audio visualizer, used here as a headless spectrum data source |
+| PipeWire | Audio backend that `cava` reads from (`method = pipewire` in `cava.conf`) |
+| A Wayland compositor that supports layer-shell (e.g. Hyprland, Sway) | Required for the click-through overlay window |
+| `systemd --user` | Used to autostart and supervise AudioFrame |
+
+Make sure `quickshell` and `cava` are installed and on your `PATH` before installing.
+
+---
+
+## Installation
 
 ```bash
-quickshell --version
+git clone <this-repo-url>
+cd audioframe
+./install.sh
+```
+
+`install.sh` will:
+
+1. Copy `shell.qml`, `Config.qml`, `AudioFrame.qml`, `AudioFrameWindow.qml`, and `cava.conf` into `~/.config/quickshell/audioframe/`.
+2. Create a `systemd --user` service at `~/.config/systemd/user/audioframe.service` that runs `quickshell -c audioframe`.
+3. Reload the systemd user daemon, enable the service (autostart on login), and start it immediately.
+
+### Managing the service
+
+```bash
+systemctl --user status audioframe   # check status / logs
+systemctl --user stop audioframe     # stop it
+systemctl --user restart audioframe  # restart (e.g. after editing config)
+systemctl --user disable audioframe  # turn off autostart
+```
+
+### Uninstalling
+
+```bash
+systemctl --user disable --now audioframe
+rm -rf ~/.config/quickshell/audioframe
+rm ~/.config/systemd/user/audioframe.service
+systemctl --user daemon-reload
+```
+
+---
+
+## File overview
+
+| File | Description |
+|---|---|
+| `shell.qml` | Entry point. Spawns one `AudioFrameWindow` per connected screen. You normally never need to touch this. |
+| `AudioFrameWindow.qml` | Creates the transparent, click-through overlay panel and positions the visualizer inside it based on `Config.qml`. |
+| `AudioFrame.qml` | Core logic: launches `cava`, parses spectrum data, applies audio processing (boosts, smoothing, beat/transient detection), and paints the waveform on a `Canvas`. |
+| `Config.qml` | **The file you edit.** All user-facing settings live here. |
+| `cava.conf` | Configuration for the `cava` audio-capture backend (sample rate, bar count, smoothing, etc). AudioFrame launches `cava -p cava.conf` internally. |
+| `install.sh` | Installer script — copies files and sets up the systemd service. |
+
+---
+
+## Configuring AudioFrame (`Config.qml`)
+
+After installing, edit the live copy at:
+
+```
+~/.config/quickshell/audioframe/Config.qml
+```
+
+then run `systemctl --user restart audioframe` to apply changes (Quickshell may also hot-reload on save, depending on your setup).
+
+Every setting is a `readonly property` inside a single `QtObject`. Below is what each one does, grouped the same way as the file itself.
+
+### Position
+
+| Property | Type | Description |
+|---|---|---|
+| `position` | string: `"top"` \| `"bottom"` | Which screen edge the visualizer sits on. `"top"` makes the waveform grow **downward**; `"bottom"` makes it grow **upward**. |
+| `alignment` | string: `"start"` \| `"center"` \| `"end"` | Horizontal alignment of the visualizer along that edge (left / centered / right). |
+| `margin` | int | Distance in pixels from the screen edge. |
+
+```qml
+readonly property string position: "bottom"
+readonly property string alignment: "center"
+readonly property int margin: 0
+```
+
+### Size
+
+| Property | Type | Description |
+|---|---|---|
+| `visualizerWidth` | int | Width of the visualizer, in pixels. |
+| `visualizerHeight` | int | Maximum height of the visualizer's drawing area, in pixels. |
+| `maximumHeight` | real | Maximum height an audio peak is allowed to reach. Lower = shorter peaks, higher = taller peaks. |
+| `minimumHeight` | real | Baseline height shown when audio is quiet/silent. |
+
+```qml
+readonly property int visualizerWidth: 700
+readonly property int visualizerHeight: 100
+readonly property real maximumHeight: 50
+readonly property real minimumHeight: 0
+```
+
+### Color
+
+| Property | Type | Description |
+|---|---|---|
+| `visualizerColor` | color | Fill/stroke color of the waveform. Accepts any QML color string (`"#ffffff"`, `"red"`, `"#80ffffff"` for translucency, etc). |
+
+```qml
+readonly property color visualizerColor: "#ffffff"
+```
+
+### Spectrum
+
+| Property | Type | Description |
+|---|---|---|
+| `barCount` | int | Number of visual ridges/points drawn across the width. Higher = more detailed waveform, but more CPU work. Suggested: `32` (chunky) → `64` (detailed) → `96` (very detailed) → `128` (extremely detailed). |
+
+```qml
+readonly property int barCount: 96
+```
+
+> **Note:** `barCount` is AudioFrame's own visual resolution, separate from `bars` in `cava.conf` (cava's raw sampling resolution). See [cava.conf](#cava-configuration-cavaconf) below.
+
+### Overall audio sensitivity
+
+| Property | Type | Description |
+|---|---|---|
+| `sensitivity` | real | Global multiplier applied to all audio energy before drawing. `0.5` = subtle, `1.0` = normal, `1.5` = strong, `2.0` = very reactive. |
+
+```qml
+readonly property real sensitivity: 1.5
+```
+
+### Audio response
+
+Controls the envelope shaping of the waveform over time.
+
+| Property | Type | Description |
+|---|---|---|
+| `attack` | real | *(Reserved)* Intended to control how quickly the waveform reacts when sound increases (lower = faster). Recommended `0.015–0.035` for fast trap-style hats. **Currently not wired into the rendering logic in this version of `AudioFrame.qml`** — kept for forward-compatibility / future use. |
+| `decay` | real | How quickly peaks fall back down after a hit. Lower = sharper/snappier falloff, higher = longer trailing decay. |
+| `smoothing` | real | General smoothing applied to the animation each frame. Lower = more raw/jittery/reactive, higher = smoother but less immediate. |
+
+```qml
+readonly property real attack: 0.035
+readonly property real decay: 0.10
+readonly property real smoothing: 0.035
+```
+
+### Frequency balance
+
+Independent gain per frequency band, applied before the waveform is rendered.
+
+| Property | Type | Description |
+|---|---|---|
+| `bassBoost` | real | Gain for bass / kick / sub-bass frequencies. |
+| `midBoost` | real | Gain for mid frequencies (vocals, snares, most instruments). |
+| `highBoost` | real | Gain for treble / hi-hats / high-frequency percussion. |
+
+```qml
+readonly property real bassBoost: 1.70
+readonly property real midBoost: 1.00
+readonly property real highBoost: 1.70
+```
+
+### Ridges / wave shape
+
+| Property | Type | Description |
+|---|---|---|
+| `ridgeSharpness` | real | Controls how peaked/pointy vs. rounded each ridge looks. `1.0` = soft, `1.5` = balanced, `2.0` = sharp, `2.5` = very sharp. |
+| `waveSmooth` | real | Blends neighboring bars together to smooth the overall silhouette. `0.00` = maximum individual ridge detail (no blending), `0.04` = balanced, `0.10` = smooth, `0.20` = very smooth. |
+
+```qml
+readonly property real ridgeSharpness: 1.70
+readonly property real waveSmooth: 0.04
+```
+
+### Transient / beat reaction
+
+Controls the extra "punch" the waveform gets on sudden hits (kicks, snares, claps).
+
+| Property | Type | Description |
+|---|---|---|
+| `beatSensitivity` | real | How strongly sudden audio changes affect the waveform overall. Higher = stronger visual reaction to kicks/snares/hats. |
+| `beatDecay` | real | How quickly the transient/beat pulse fades back out. Lower = extremely snappy pulse, higher = longer-lingering pulse. |
+
+```qml
+readonly property real beatSensitivity: 1.00
+readonly property real beatDecay: 0.11
+```
+
+### Spectrum mapping
+
+Controls how frequency data is distributed spatially across the width of the visualizer (center vs. edges).
+
+| Property | Type | Description |
+|---|---|---|
+| `frequencyCurve` | real | Controls how quickly frequencies move from center → edge across the width. Lower = bass dominates more of the visible area, higher = a more even spread of frequencies. |
+| `centerBassWeight` | real | How strongly bass energy influences the center of the waveform. |
+| `centerBassEnergy` | real | Extra bass energy added directly to the center point, independent of the weighting above. |
+| `edgeHighWeight` | real | How strongly treble/high frequencies are emphasized toward the edges of the visualizer. |
+
+```qml
+readonly property real frequencyCurve: 0.82
+readonly property real centerBassWeight: 0.45
+readonly property real centerBassEnergy: 0.35
+readonly property real edgeHighWeight: 1.00
+```
+
+### Transient frequency weights
+
+Fine-tune which frequency bands contribute to beat/transient detection (separate from the visual `*Boost` gains above).
+
+| Property | Type | Description |
+|---|---|---|
+| `bassTransientWeight` | real | How much kick/bass transients contribute to the beat pulse. |
+| `midTransientWeight` | real | How much snare/clap/mid transients contribute to the beat pulse. |
+| `highTransientWeight` | real | How much hats/treble transients contribute to the beat pulse. |
+| `transientThreshold` | real | Minimum transient magnitude required before a beat pulse is triggered at all. Higher = only strong hits trigger a pulse. |
+| `transientMultiplier` | real | Amplification applied to detected transients before they become a pulse. |
+| `beatPulseStrength` | real | How much the resulting beat pulse visually adds to the waveform's height. |
+
+```qml
+readonly property real bassTransientWeight: 1.50
+readonly property real midTransientWeight: 1.20
+readonly property real highTransientWeight: 0.90
+
+readonly property real transientThreshold: 0.018
+readonly property real transientMultiplier: 7.50
+readonly property real beatPulseStrength: 0.65
+```
+
+---
+
+## Full example `Config.qml`
+
+This is the shipped default configuration — a strong, punchy, bass-heavy preset centered at the bottom of the screen:
+
+```qml
+import QtQuick
+
+QtObject {
+
+    // POSITION
+    readonly property string position: "bottom"
+    readonly property string alignment: "center"
+    readonly property int margin: 0
+
+    // SIZE
+    readonly property int visualizerWidth: 700
+    readonly property int visualizerHeight: 100
+    readonly property real maximumHeight: 50
+    readonly property real minimumHeight: 0
+
+    // COLOR
+    readonly property color visualizerColor: "#ffffff"
+
+    // SPECTRUM
+    readonly property int barCount: 96
+
+    // OVERALL AUDIO SENSITIVITY
+    readonly property real sensitivity: 1.5
+
+    // AUDIO RESPONSE
+    readonly property real attack: 0.035
+    readonly property real decay: 0.10
+    readonly property real smoothing: 0.035
+
+    // FREQUENCY BALANCE
+    readonly property real bassBoost: 1.70
+    readonly property real midBoost: 1.00
+    readonly property real highBoost: 1.70
+
+    // RIDGES / WAVE SHAPE
+    readonly property real ridgeSharpness: 1.70
+    readonly property real waveSmooth: 0.04
+
+    // TRANSIENT / BEAT REACTION
+    readonly property real beatSensitivity: 1.00
+    readonly property real beatDecay: 0.11
+
+    // SPECTRUM MAPPING
+    readonly property real frequencyCurve: 0.82
+    readonly property real centerBassWeight: 0.45
+    readonly property real centerBassEnergy: 0.35
+    readonly property real edgeHighWeight: 1.00
+
+    // TRANSIENT FREQUENCY WEIGHTS
+    readonly property real bassTransientWeight: 1.50
+    readonly property real midTransientWeight: 1.20
+    readonly property real highTransientWeight: 0.90
+
+    readonly property real transientThreshold: 0.018
+    readonly property real transientMultiplier: 7.50
+    readonly property real beatPulseStrength: 0.65
+}
+```
+
+### A few ready-made presets
+
+**Minimal / subtle (top bar, thin line):**
+```qml
+readonly property string position: "top"
+readonly property int visualizerHeight: 40
+readonly property real maximumHeight: 20
+readonly property real sensitivity: 0.8
+readonly property real waveSmooth: 0.10
+```
+
+**Extra punchy / EDM-style:**
+```qml
+readonly property real sensitivity: 2.0
+readonly property real bassBoost: 2.0
+readonly property real beatSensitivity: 1.5
+readonly property real transientMultiplier: 9.0
+```
+
+**Ultra smooth / ambient:**
+```qml
+readonly property real smoothing: 0.08
+readonly property real waveSmooth: 0.15
+readonly property real decay: 0.20
+readonly property real beatDecay: 0.25
+```
+
+---
+
+## Cava configuration (`cava.conf`)
+
+AudioFrame launches `cava -p cava.conf` internally to get raw spectrum data — this file controls how `cava` captures and pre-processes audio, **before** it ever reaches `Config.qml`'s tuning knobs. You generally don't need to touch this, but it's here if you want to change the audio source or cava's own smoothing.
+
+```ini
+[general]
+framerate = 60              # How many frames per second cava outputs. Matches AudioFrame's redraw rate.
+bars = 64                   # Number of frequency bars cava computes internally (raw resolution).
+autosens = 1                # 1 = cava automatically adjusts sensitivity to avoid clipping; 0 = fixed.
+lower_cutoff_freq = 25      # Lowest frequency (Hz) included in the analysis.
+higher_cutoff_freq = 18000  # Highest frequency (Hz) included in the analysis.
+sleep_timer = 0             # Seconds of silence before cava sleeps to save CPU (0 = never sleep).
+
+[input]
+method = pipewire           # Audio backend. pipewire is required for the default setup.
+source = auto                # Audio source to capture; "auto" picks the default sink monitor.
+sample_rate = 48000          # Sample rate cava reads audio at.
+sample_bits = 16             # Bit depth of captured audio.
+channels = mono              # mono or stereo capture.
+mono_option = average         # How stereo is downmixed to mono (average/left/right), when channels=mono.
+
+[output]
+method = raw                 # Output raw ASCII data instead of drawing cava's own terminal UI.
+raw_target = /dev/stdout     # Where cava writes frame data — AudioFrame.qml reads this via its Process's stdout.
+data_format = ascii           # Format of the raw output values.
+ascii_max_range = 1000        # Maximum value of each ASCII bar sample (used to normalize in AudioFrame.qml).
+bar_delimiter = 32            # ASCII code separating bar values within a frame (32 = space).
+frame_delimiter = 10          # ASCII code separating frames (10 = newline).
+
+[smoothing]
+noise_reduction = 8           # Cava's own noise gate / smoothing (0–100). Higher = smoother, less noisy input.
+monstercat = 0                # Monstercat-style bar smoothing filter (0 = off).
+waves = 0                     # Wave-based smoothing filter (0 = off).
+```
+
+> ⚠️ Don't change `method = raw`, `data_format = ascii`, `bar_delimiter`, or `frame_delimiter` — `AudioFrame.qml`'s `SplitParser` is written specifically to parse this raw ASCII, space-delimited, newline-framed format. Changing these will break parsing.
+>
+> Safe to tweak: `bars`, `framerate`, `autosens`, `lower_cutoff_freq`, `higher_cutoff_freq`, `source`, and everything under `[smoothing]`.
+
+---
+
+## Troubleshooting
+
+- **Nothing shows up:** confirm the service is running with `systemctl --user status audioframe`, and check logs with `journalctl --user -u audioframe -f`.
+- **No audio reactivity:** verify `cava` runs correctly standalone (`cava -p ~/.config/quickshell/audioframe/cava.conf`) and that PipeWire is your active audio backend.
+- **Wrong monitor / multi-monitor issues:** AudioFrame spawns one window per screen via `Quickshell.screens` in `shell.qml` — this is automatic and doesn't need per-monitor config.
+- **Config changes not applying:** restart the service after editing `Config.qml`: `systemctl --user restart audioframe`.
+
+---
+
+## License
+
+Add your license of choice here (e.g. MIT).
