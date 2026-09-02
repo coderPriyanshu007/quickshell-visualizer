@@ -3,7 +3,6 @@ import Quickshell
 import Quickshell.Io
 
 QtObject {
-
     id: root
 
     required property QtObject config
@@ -16,7 +15,6 @@ QtObject {
     // ================================================================
 
     function expandPath(path) {
-
         if (!path)
             return ""
 
@@ -34,7 +32,6 @@ QtObject {
     // ================================================================
 
     property FileView paletteFile: FileView {
-
         id: paletteFile
 
         path: root.expandPath(root.config.paletteFile)
@@ -43,20 +40,12 @@ QtObject {
         blockLoading: true
 
         onFileChanged: {
-
-            console.log(
-                "AudioFrame: palette file changed"
-            )
-
+            console.log("AudioFrame: palette file changed")
             reload()
         }
 
         onLoaded: {
-
-            console.log(
-                "AudioFrame: palette loaded"
-            )
-
+            console.log("AudioFrame: palette loaded")
             root.reloadPalette()
         }
     }
@@ -67,7 +56,6 @@ QtObject {
     // ================================================================
 
     function reloadPalette() {
-
         if (!root.config.usePalette) {
             root.colors = []
             return
@@ -86,42 +74,23 @@ QtObject {
         }
 
         try {
-
-            const json =
-                JSON.parse(text)
-
+            const json = JSON.parse(text)
             let extracted = []
-
 
             // --------------------------------------------------------
             // First try configured/common palette locations.
             // --------------------------------------------------------
-
-            extracted =
-                findPaletteArray(
-                    json
-                )
-
+            extracted = findPaletteArray(json)
 
             // --------------------------------------------------------
             // If no structured palette was found,
             // recursively collect any valid colors.
             // --------------------------------------------------------
-
             if (extracted.length === 0) {
-
-                extracted =
-                    collectColors(
-                        json
-                    )
+                extracted = collectColors(json)
             }
 
-
-            root.colors =
-                normalizeColors(
-                    extracted
-                )
-
+            root.colors = normalizeColors(extracted)
 
             console.log(
                 "AudioFrame: loaded",
@@ -130,12 +99,10 @@ QtObject {
             )
 
         } catch (error) {
-
             console.warn(
                 "AudioFrame: failed to parse palette:",
                 error
             )
-
             root.colors = []
         }
     }
@@ -146,150 +113,87 @@ QtObject {
     // ================================================================
 
     function findPaletteArray(json) {
+        // Direct Array
+        if (Array.isArray(json))
+            return collectColors(json)
 
-    // ============================================================
-    // DIRECT ARRAY
-    // ============================================================
+        if (!json || typeof json !== "object")
+            return []
 
-    if (Array.isArray(json))
-        return collectColors(json)
+        // Explicit palette array
+        if (json.palette !== undefined) {
+            const result = collectColors(json.palette)
+            if (result.length > 0)
+                return result
+        }
 
+        // ============================================================
+        // COLORS / COLOURS OBJECT
+        // Checks both American ("colors") and British ("colours") spellings.
+        // ============================================================
+        const colorsObj = json.colors || json.colours
 
-    if (!json || typeof json !== "object")
-        return []
+        if (
+            colorsObj &&
+            typeof colorsObj === "object" &&
+            !Array.isArray(colorsObj)
+        ) {
+            const schemes = [
+                "default",
+                "dark",
+                "light"
+            ]
 
+            for (const scheme of schemes) {
+                if (colorsObj[scheme]) {
+                    const result = collectConfiguredColors(colorsObj[scheme])
+                    if (result.length > 0)
+                        return result
+                }
+            }
 
-    // ============================================================
-    // EXPLICIT PALETTE ARRAY
-    // ============================================================
+            const result = collectConfiguredColors(colorsObj)
+            if (result.length > 0)
+                return result
+        }
 
-    if (json.palette !== undefined) {
-
-        const result =
-            collectColors(
-                json.palette
-            )
-
-        if (result.length > 0)
-            return result
-    }
-
-
-    // ============================================================
-    // COLORS OBJECT
-    //
-    // IMPORTANT:
-    // Do NOT call collectColors(json.colors) first.
-    // That would collect every color in the file.
-    //
-    // Instead, use Config.paletteKeys.
-    // ============================================================
-
-    if (
-        json.colors &&
-        typeof json.colors === "object" &&
-        !Array.isArray(json.colors)
-    ) {
-
-        // --------------------------------------------------------
-        // Matugen-style:
-        //
-        // colors.default.primary
-        // colors.default.secondary
-        // colors.default.tertiary
-        // --------------------------------------------------------
-
-        const schemes = [
-            "default",
-            "dark",
-            "light"
+        // ============================================================
+        // OTHER STRUCTURED PALETTE OBJECTS
+        // ============================================================
+        const otherKeys = [
+            "colorPalette",
+            "colourPalette",
+            "palette"
         ]
 
-        for (const scheme of schemes) {
-
-            if (json.colors[scheme]) {
-
-                const result =
-                    collectConfiguredColors(
-                        json.colors[scheme]
-                    )
-
+        for (const key of otherKeys) {
+            if (json[key] !== undefined) {
+                const result = collectConfiguredColors(json[key])
                 if (result.length > 0)
                     return result
             }
         }
 
+        // ============================================================
+        // GENERIC NESTED OBJECTS
+        // ============================================================
+        const preferredKeys = [
+            "theme",
+            "default",
+            "dark",
+            "light"
+        ]
 
-        // --------------------------------------------------------
-        // Flat structure:
-        //
-        // colors.primary
-        // colors.secondary
-        // colors.tertiary
-        // --------------------------------------------------------
-
-        const result =
-            collectConfiguredColors(
-                json.colors
-            )
-
-        if (result.length > 0)
-            return result
-    }
-
-
-    // ============================================================
-    // OTHER STRUCTURED PALETTE OBJECTS
-    // ============================================================
-
-    const otherKeys = [
-        "colorPalette",
-        "colourPalette"
-    ]
-
-    for (const key of otherKeys) {
-
-        if (json[key] !== undefined) {
-
-            const result =
-                collectConfiguredColors(
-                    json[key]
-                )
-
-            if (result.length > 0)
-                return result
+        for (const key of preferredKeys) {
+            if (json[key] !== undefined) {
+                const result = findPaletteArray(json[key])
+                if (result.length > 0)
+                    return result
+            }
         }
+
+        return []
     }
-
-
-    // ============================================================
-    // GENERIC NESTED OBJECTS
-    // ============================================================
-
-    const preferredKeys = [
-        "theme",
-        "default",
-        "dark",
-        "light"
-    ]
-
-    for (const key of preferredKeys) {
-
-        if (json[key] !== undefined) {
-
-            const result =
-                findPaletteArray(
-                    json[key]
-                )
-
-            if (result.length > 0)
-                return result
-        }
-    }
-
-
-    return []
-}
 
 
     // ================================================================
@@ -297,44 +201,28 @@ QtObject {
     // ================================================================
 
     function collectConfiguredColors(object) {
-
-        if (
-            !object ||
-            typeof object !== "object"
-        )
+        if (!object || typeof object !== "object")
             return []
 
-
         const result = []
-
-        const keys =
-            root.config.paletteKeys
-
+        const keys = root.config.paletteKeys || []
 
         // First use explicitly configured keys.
-
         for (const key of keys) {
-
             if (object[key] === undefined)
                 continue
 
-            const value =
-                object[key]
+            const value = object[key]
 
             if (isColor(value))
                 result.push(value)
         }
 
-
-        // If configured keys produced colors,
-        // use those instead of collecting everything.
-
+        // If configured keys produced colors, use those instead.
         if (result.length > 0)
             return result
 
-
         // Otherwise recursively search this object.
-
         return collectColors(object)
     }
 
@@ -344,96 +232,39 @@ QtObject {
     // ================================================================
 
     function collectColors(value) {
-
         const result = []
 
-
-        // ------------------------------------------------------------
-        // Direct color
-        // ------------------------------------------------------------
-
         if (isColor(value)) {
-
             result.push(value)
-
             return result
         }
-
-
-        // ------------------------------------------------------------
-        // Array
-        // ------------------------------------------------------------
 
         if (Array.isArray(value)) {
-
             for (const item of value) {
-
-                const found =
-                    collectColors(
-                        item
-                    )
-
-                result.push(
-                    ...found
-                )
+                const found = collectColors(item)
+                result.push(...found)
             }
-
             return result
         }
 
-
-        // ------------------------------------------------------------
-        // Object
-        // ------------------------------------------------------------
-
-        if (
-            value &&
-            typeof value === "object"
-        ) {
+        if (value && typeof value === "object") {
+            const keys = root.config.paletteKeys || []
 
             // Prefer configured keys first.
-
-            for (
-                const key of
-                root.config.paletteKeys
-            ) {
-
+            for (const key of keys) {
                 if (value[key] !== undefined) {
-
-                    const found =
-                        collectColors(
-                            value[key]
-                        )
-
-                    result.push(
-                        ...found
-                    )
+                    const found = collectColors(value[key])
+                    result.push(...found)
                 }
             }
 
-
             // Then inspect everything else.
-
-            for (
-                const key of
-                Object.keys(value)
-            ) {
-
-                if (
-                    root.config.paletteKeys.includes(
-                        key
-                    )
-                )
+            for (const key of Object.keys(value)) {
+                if (keys.includes(key))
                     continue
 
-                const found =
-                    collectColors(
-                        value[key]
-                    )
-
-                result.push(
-                    ...found
-                )
+                const found = collectColors(value[key])
+                result.push(...found)
             }
         }
 
@@ -443,45 +274,22 @@ QtObject {
 
     // ================================================================
     // COLOR VALIDATION
+    // Accepts hex strings WITH or WITHOUT a leading '#'
     // ================================================================
 
     function isColor(value) {
-
         if (typeof value !== "string")
             return false
 
-        const valueTrimmed =
-            value.trim()
+        const valueTrimmed = value.trim()
 
-
-        // #RGB
-        // #RGBA
-        // #RRGGBB
-        // #AARRGGBB
-
-        if (
-            /^#[0-9a-fA-F]{3,4}$/.test(
-                valueTrimmed
-            ) ||
-            /^#[0-9a-fA-F]{6}$/.test(
-                valueTrimmed
-            ) ||
-            /^#[0-9a-fA-F]{8}$/.test(
-                valueTrimmed
-            )
-        )
+        // Match optional '#' followed by 3, 4, 6, or 8 hex characters
+        if (/^#?([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(valueTrimmed))
             return true
-
 
         // rgb(), rgba(), hsl(), hsla()
-
-        if (
-            /^(rgb|rgba|hsl|hsla)\(/i.test(
-                valueTrimmed
-            )
-        )
+        if (/^(rgb|rgba|hsl|hsla)\(/i.test(valueTrimmed))
             return true
-
 
         return false
     }
@@ -489,37 +297,32 @@ QtObject {
 
     // ================================================================
     // NORMALIZATION
+    // Prepends missing '#' and removes duplicates.
     // ================================================================
 
     function normalizeColors(input) {
-
         const result = []
         const seen = {}
 
-
         for (const value of input) {
-
             if (!isColor(value))
                 continue
 
+            let color = value.trim()
 
-            const color =
-                value.trim()
+            // Prepend missing '#' if it's a naked hex value
+            if (!color.startsWith("#") && !color.includes("(")) {
+                color = "#" + color
+            }
 
-
-            const key =
-                color.toLowerCase()
-
+            const key = color.toLowerCase()
 
             if (seen[key])
                 continue
 
-
             seen[key] = true
-
             result.push(color)
         }
-
 
         return result
     }
